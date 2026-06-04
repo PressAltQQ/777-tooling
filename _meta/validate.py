@@ -3,9 +3,9 @@ Frontmatter validator for the 777 knowledge-base vault.
 
 Reads schema from schema.json (same directory as this script).
 
-TWO MODES
----------
-Hook mode (default):
+THREE MODES
+-----------
+1. Claude Code pre-write hook mode:
     Called by Claude Code PreToolUse hook with no CLI arguments.
     Reads hook JSON from stdin (fields: tool_name, tool_input with file_path,
     and for Write: content; Edit: old_string/new_string/replace_all;
@@ -14,7 +14,18 @@ Hook mode (default):
     Exit 0 = allow.  Exit 2 + stderr message = block (Claude Code surfaces
     the stderr as the error reason).
 
-CLI mode:
+2. Codex CLI post-write hook mode:
+    Called by Codex PostToolUse hook with no CLI arguments.
+    Reads hook JSON from stdin (fields: tool_name == "apply_patch",
+    tool_input.command = patch text, cwd = vault root).
+    Parses patch header lines to find Add/Update File paths; resolves each
+    against cwd; validates the file ON DISK (post-write).
+    For Add File paths not yet on disk (edge case), reconstructs content
+    from the patch's + lines and validates that.
+    Exit 0 = allow.  Exit 2 + stderr message = block (Codex surfaces the
+    reason and the model fixes it).
+
+3. CLI mode:
     Invoked as: python3 validate.py <file.md> [<file2.md> ...]
     Reads each file from disk, prints PASS/FAIL per file.
     Exits non-zero if any file fails.
@@ -173,31 +184,65 @@ def validate_content(content, zone, schema):
 # Path → zone resolution
 # ---------------------------------------------------------------------------
 
-def resolve_zone(file_path_str, schema):
+# Directories that mark a project root (in priority order after env var)
+_ROOT_MARKERS = (".claude", ".codex", ".obsidian")
+
+
+def resolve_zone(file_path_str, schema, cwd=None):
     """
     Given an absolute (or relative) file path, determine the zone name.
     Zone = first path segment under the project root.
     Returns (zone: str or None, in_enforced: bool).
+
+    Project-root resolution order:
+      1. $CLAUDE_PROJECT_DIR env var
+      2. Walk up from file location looking for .claude, .codex, or .obsidian
+      3. cwd argument (used when file path is relative, e.g. from Codex payload)
+      4. Hard-coded fallback /Users/Mikhail/Documents/777
     """
     enforced = schema.get("enforced_zones", [])
-    file_path = Path(file_path_str).resolve()
 
-    # Determine project root: env var first, then walk up for .claude dir
+    # Resolve file path: if relative, anchor to cwd first
+    raw_path = Path(file_path_str)
+    if not raw_path.is_absolute() and cwd:
+        raw_path = Path(cwd) / raw_path
+    file_path = raw_path.resolve()
+
+    # Determine project root
     project_root = None
     env_root = os.environ.get("CLAUDE_PROJECT_DIR")
     if env_root:
         project_root = Path(env_root).resolve()
     else:
-        # Walk up from file location looking for .claude directory
+        # Walk up from file location looking for any root marker
         candidate = file_path.parent
         for _ in range(20):
-            if (candidate / ".claude").exists():
-                project_root = candidate
+            for marker in _ROOT_MARKERS:
+                if (candidate / marker).exists():
+                    project_root = candidate
+                    break
+            if project_root is not None:
                 break
             parent = candidate.parent
             if parent == candidate:
                 break
             candidate = parent
+
+        if project_root is None and cwd:
+            # Try walking up from cwd as well
+            candidate = Path(cwd).resolve()
+            for _ in range(20):
+                for marker in _ROOT_MARKERS:
+                    if (candidate / marker).exists():
+                        project_root = candidate
+                        break
+                if project_root is not None:
+                    break
+                parent = candidate.parent
+                if parent == candidate:
+                    break
+                candidate = parent
+
         if project_root is None:
             project_root = Path("/Users/Mikhail/Documents/777")
 
@@ -215,7 +260,7 @@ def resolve_zone(file_path_str, schema):
 
 
 # ---------------------------------------------------------------------------
-# Prospective content computation (for hook mode)
+# Prospective content computation (for Claude Code hook mode)
 # ---------------------------------------------------------------------------
 
 def apply_edit(current, old_string, new_string, replace_all=False):
@@ -258,6 +303,68 @@ def compute_prospective_content(tool_name, tool_input, file_path):
 
 
 # ---------------------------------------------------------------------------
+# apply_patch parser (for Codex hook mode)
+# ---------------------------------------------------------------------------
+
+# Matches: *** Add File: relative/path.md
+#          *** Update File: relative/path.md
+_PATCH_FILE_RE = re.compile(r'^\*\*\* (Add|Update) File: (.+)$')
+_PATCH_DELETE_RE = re.compile(r'^\*\*\* Delete File:')
+
+
+def parse_apply_patch(command_text):
+    """
+    Parse an OpenAI apply_patch command string.
+    Returns a list of (operation, relative_path, content_lines) tuples where:
+      operation  = "Add" | "Update"
+      relative_path = path string from the header
+      content_lines = list of added lines ('+' stripped) for Add File sections;
+                      empty list for Update (on-disk validation preferred)
+    """
+    results = []
+    lines = command_text.splitlines()
+
+    current_op = None
+    current_path = None
+    current_add_lines = []
+    in_add_section = False
+
+    for line in lines:
+        m = _PATCH_FILE_RE.match(line)
+        if m:
+            # Save previous entry
+            if current_op is not None:
+                results.append((current_op, current_path, current_add_lines))
+            current_op = m.group(1)   # "Add" or "Update"
+            current_path = m.group(2).strip()
+            current_add_lines = []
+            in_add_section = (current_op == "Add")
+            continue
+
+        if _PATCH_DELETE_RE.match(line):
+            if current_op is not None:
+                results.append((current_op, current_path, current_add_lines))
+            current_op = None
+            current_path = None
+            current_add_lines = []
+            in_add_section = False
+            continue
+
+        if line.startswith("*** "):
+            # Other patch header (Begin Patch, End Patch, @@ context, etc.)
+            in_add_section = False
+            continue
+
+        if in_add_section and line.startswith("+"):
+            current_add_lines.append(line[1:])
+
+    if current_op is not None:
+        results.append((current_op, current_path, current_add_lines))
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Hook mode
 # ---------------------------------------------------------------------------
 
@@ -265,11 +372,18 @@ def run_hook_mode():
     try:
         raw = sys.stdin.read()
         hook_data = json.loads(raw)
-    except (json.JSONDecodeError, ValueError) as e:
+    except (json.JSONDecodeError, ValueError):
         # Not valid hook JSON — fail safe (allow)
         sys.exit(0)
 
     tool_name = hook_data.get("tool_name", "")
+
+    # ---- Codex apply_patch (PostToolUse) ----
+    if tool_name == "apply_patch":
+        run_codex_mode(hook_data)
+        return
+
+    # ---- Claude Code Write/Edit/MultiEdit (PreToolUse) ----
     if tool_name not in ("Write", "Edit", "MultiEdit"):
         sys.exit(0)
 
@@ -293,6 +407,60 @@ def run_hook_mode():
             f"[validate.py] Frontmatter validation FAILED for '{file_path_str}' (zone: {zone}):\n{msg}",
             file=sys.stderr,
         )
+        sys.exit(2)
+
+    sys.exit(0)
+
+
+def run_codex_mode(hook_data):
+    """
+    Codex PostToolUse handler for apply_patch.
+    Validates affected .md files in enforced zones ON DISK (post-write).
+    Falls back to patch content reconstruction for Add File paths not on disk.
+    """
+    tool_input = hook_data.get("tool_input", {})
+    command_text = tool_input.get("command", "")
+    cwd = hook_data.get("cwd", "") or os.getcwd()
+
+    schema = load_schema()
+    patch_entries = parse_apply_patch(command_text)
+
+    failures = []
+
+    for op, rel_path, add_lines in patch_entries:
+        # op is "Add" or "Update"
+        if not rel_path.endswith(".md"):
+            continue
+
+        # Resolve the path against cwd
+        abs_path = (Path(cwd) / rel_path).resolve()
+
+        zone, in_enforced = resolve_zone(str(abs_path), schema, cwd=cwd)
+        if not in_enforced:
+            continue
+
+        # Try reading from disk first (normal case for both Add and Update)
+        if abs_path.exists():
+            try:
+                content = abs_path.read_text(encoding="utf-8")
+            except OSError as e:
+                failures.append(f"{rel_path}: cannot read file: {e}")
+                continue
+        elif op == "Add" and add_lines:
+            # Fallback: reconstruct from patch + lines
+            content = "\n".join(add_lines)
+        else:
+            # File doesn't exist and we can't reconstruct — skip
+            continue
+
+        ok, msg = validate_content(content, zone, schema)
+        if not ok:
+            failures.append(
+                f"[validate.py] Frontmatter validation FAILED for '{rel_path}' (zone: {zone}):\n{msg}"
+            )
+
+    if failures:
+        print("\n".join(failures), file=sys.stderr)
         sys.exit(2)
 
     sys.exit(0)

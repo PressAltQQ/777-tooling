@@ -1,0 +1,8 @@
+[[hooks.PostToolUse]]
+matcher = "^apply_patch$"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = 'python3 "_meta/validate.py"'
+timeout = 30
+statusMessage = "Validating KB frontmatter"

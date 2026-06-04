@@ -76,11 +76,15 @@ echo ""
 # Create target directories
 echo "--> Creating target directories..."
 mkdir -p "$VAULT/.claude"
+mkdir -p "$VAULT/.codex"
 mkdir -p "$VAULT/_meta"
 
 # Copy files
 echo "--> Installing .claude/settings.json..."
 cp "$SCRIPT_DIR/.claude/settings.json" "$VAULT/.claude/settings.json"
+
+echo "--> Installing .codex/config.toml..."
+cp "$SCRIPT_DIR/.codex/config.toml" "$VAULT/.codex/config.toml"
 
 echo "--> Installing _meta/validate.py..."
 cp "$SCRIPT_DIR/_meta/validate.py" "$VAULT/_meta/validate.py"
@@ -91,6 +95,7 @@ cp "$SCRIPT_DIR/_meta/schema.json" "$VAULT/_meta/schema.json"
 echo ""
 echo "==> Installation complete. Files installed:"
 echo "    $VAULT/.claude/settings.json"
+echo "    $VAULT/.codex/config.toml"
 echo "    $VAULT/_meta/validate.py"
 echo "    $VAULT/_meta/schema.json"
 echo ""
@@ -105,3 +110,8 @@ echo "       Settings → Files & Links → enable 'Detect all file extensions'.
 echo ""
 echo "    NOTE: The validation hard gate is now ACTIVE on this machine."
 echo "          Claude Code will validate frontmatter before any write to enforced zones."
+echo ""
+echo "    3. Codex CLI users:"
+echo "       - Ensure [features] hooks = true in ~/.codex/config.toml"
+echo "       - Always launch Codex FROM the vault root (cd $VAULT && codex)"
+echo "       - On first run, trust the hook via the /hooks command (SHA-pinned approval)"

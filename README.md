@@ -47,6 +47,41 @@ git pull
 
 ---
 
+## Codex
+
+The validator also supports **Codex CLI** via a `PostToolUse` hook on `apply_patch`.
+
+### Как это работает
+
+| | Claude Code | Codex |
+|---|---|---|
+| Hook type | `PreToolUse` | `PostToolUse` |
+| Tool watched | `Write` / `Edit` / `MultiEdit` | `apply_patch` |
+| Validation timing | **Before** the write (blocks the write) | **After** the write (file on disk; blocks and model fixes) |
+| Config file | `.claude/settings.json` | `.codex/config.toml` |
+
+Codex выполняет файловые правки через `apply_patch`. После записи хук вызывает `validate.py`, который читает изменённые `.md`-файлы с диска, проверяет фронтматтер и при ошибке выходит с кодом 2 — Codex показывает причину модели, и та исправляет файл.
+
+### Настройка Codex
+
+1. **Включить хуки** в `~/.codex/config.toml`:
+   ```toml
+   [features]
+   hooks = true
+   ```
+
+2. **Запускать Codex из корня vault**:
+   ```bash
+   cd /path/to/your/vault
+   codex
+   ```
+
+3. **Доверить хук** при первом запуске — выполнить команду `/hooks` в Codex и подтвердить хук по SHA (SHA-pinned approval).
+
+После `./install.sh` файл `.codex/config.toml` будет установлен в vault автоматически.
+
+---
+
 ## Важно: настройка Obsidian Sync
 
 Держать в Obsidian Sync настройку **«Sync all other file types» ВЫКЛ**. Если включить синк `.py`/`.json`, тулинг окажется под управлением двух источников (git и Sync одновременно), что приведёт к конфликтам и непредсказуемому состоянию. Git — единственный источник правды для тулинга; Obsidian Sync — единственный источник правды для контента.
