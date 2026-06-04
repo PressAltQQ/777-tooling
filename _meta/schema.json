@@ -1,0 +1,18 @@
+{
+  "zones": {
+    "tasks": {
+      "required": ["author", "why", "status", "updated", "links"],
+      "status_enum": ["backlog", "todo", "in-progress", "blocked", "done"]
+    },
+    "decisions": {
+      "required": ["author", "why", "status", "updated", "links"],
+      "status_enum": ["proposed", "accepted", "superseded", "rejected"]
+    },
+    "timeline": {
+      "required": ["author", "why", "updated", "links"],
+      "status_enum": null
+    }
+  },
+  "date_fields": ["updated"],
+  "enforced_zones": ["tasks", "decisions", "timeline"]
+}
