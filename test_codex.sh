@@ -2,11 +2,12 @@
 # Test script for validate.py Codex mode
 set -uo pipefail
 
-VALIDATE="/Users/Mikhail/Documents/projects/777-tooling/_meta/validate.py"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+VALIDATE="$SCRIPT_DIR/_meta/validate.py"
 TMPDIR_BASE="/tmp/test_777_$$"
 
 mkdir -p "$TMPDIR_BASE/.obsidian" "$TMPDIR_BASE/tasks" "$TMPDIR_BASE/artifacts" "$TMPDIR_BASE/_meta"
-cp /Users/Mikhail/Documents/projects/777-tooling/_meta/schema.json "$TMPDIR_BASE/_meta/schema.json"
+cp "$SCRIPT_DIR/_meta/schema.json" "$TMPDIR_BASE/_meta/schema.json"
 
 PASS=0
 FAIL=0

@@ -198,7 +198,7 @@ def resolve_zone(file_path_str, schema, cwd=None):
       1. $CLAUDE_PROJECT_DIR env var
       2. Walk up from file location looking for .claude, .codex, or .obsidian
       3. cwd argument (used when file path is relative, e.g. from Codex payload)
-      4. Hard-coded fallback /Users/Mikhail/Documents/777
+      4. Script-relative fallback: parent of the _meta/ directory
     """
     enforced = schema.get("enforced_zones", [])
 
@@ -244,7 +244,7 @@ def resolve_zone(file_path_str, schema, cwd=None):
                 candidate = parent
 
         if project_root is None:
-            project_root = Path("/Users/Mikhail/Documents/777")
+            project_root = Path(__file__).resolve().parent.parent
 
     try:
         rel = file_path.relative_to(project_root)
